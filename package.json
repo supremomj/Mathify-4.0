@@ -1,0 +1,25 @@
+{
+  "name": "mathify",
+  "version": "1.0.0",
+  "description": "Mathify Educational Application",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "db:view": "node scripts/db-helper.js view",
+    "db:init": "node scripts/db-helper.js init",
+    "db:reset": "node scripts/db-helper.js reset",
+    "db:help": "node scripts/db-helper.js help",
+    "seed:all": "node scripts/seed-all-quarters.js",
+    "seed:curriculum": "node scripts/seed-curriculum.js",
+    "admin:create": "node scripts/create-admin.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "sqlite3": "^5.1.7"
+  }
+}
