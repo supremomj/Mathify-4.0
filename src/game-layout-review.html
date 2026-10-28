@@ -1,0 +1,356 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mathify game layout review</title><link rel="stylesheet" href="student-dashboard.css"><style>body{margin:0}#gameContainer{position:fixed;inset:0;overflow-y:auto;background:var(--bg)}</style><div id="gameContainer"></div><script>const currentGame={currentQuestion:0,totalQuestions:10,questions:[{"question":"Which fraction is greater: 1/4 or 2/4?","type":"multiple-choice","options":["1/4","2/4","They are equal"],"correctAnswer":1,"skill":"Comparing Fractions","practiceUntimed":true,"diagram":{"src":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzNjAgMjYwIiByb2xlPSJpbWciPjx0aXRsZT5HaXZlbiB2YWx1ZXM6IDEvNCwgMi80LiBSZWFkIHRoZSBxdWVzdGlvbiB0byBzZWUgaG93IHRoZXNlIHZhbHVlcyBhcmUgdXNlZC48L3RpdGxlPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIHJ4PSIyMCIgZmlsbD0iI2ZhZmJmZiIvPjxyZWN0IHg9IjIwIiB5PSIxNiIgd2lkdGg9IjE1MCIgaGVpZ2h0PSIxODAiIHJ4PSIxNiIgZmlsbD0iI2VlZjJmZiIvPjxyZWN0IHg9IjMwIiB5PSI4NSIgd2lkdGg9IjMyLjUiIGhlaWdodD0iNTAiIGZpbGw9IiM2MzY2ZjEiIHN0cm9rZT0iIzMxMmU4MSIvPjxyZWN0IHg9IjYyLjUiIHk9Ijg1IiB3aWR0aD0iMzIuNSIgaGVpZ2h0PSI1MCIgZmlsbD0iI2ZmZiIgc3Ryb2tlPSIjMzEyZTgxIi8+PHJlY3QgeD0iOTUiIHk9Ijg1IiB3aWR0aD0iMzIuNSIgaGVpZ2h0PSI1MCIgZmlsbD0iI2ZmZiIgc3Ryb2tlPSIjMzEyZTgxIi8+PHJlY3QgeD0iMTI3LjUiIHk9Ijg1IiB3aWR0aD0iMzIuNSIgaGVpZ2h0PSI1MCIgZmlsbD0iI2ZmZiIgc3Ryb2tlPSIjMzEyZTgxIi8+PHJlY3QgeD0iMTkwIiB5PSIxNiIgd2lkdGg9IjE1MCIgaGVpZ2h0PSIxODAiIHJ4PSIxNiIgZmlsbD0iI2VlZjJmZiIvPjxyZWN0IHg9IjIwMCIgeT0iODUiIHdpZHRoPSIzMi41IiBoZWlnaHQ9IjUwIiBmaWxsPSIjNjM2NmYxIiBzdHJva2U9IiMzMTJlODEiLz48cmVjdCB4PSIyMzIuNSIgeT0iODUiIHdpZHRoPSIzMi41IiBoZWlnaHQ9IjUwIiBmaWxsPSIjNjM2NmYxIiBzdHJva2U9IiMzMTJlODEiLz48cmVjdCB4PSIyNjUiIHk9Ijg1IiB3aWR0aD0iMzIuNSIgaGVpZ2h0PSI1MCIgZmlsbD0iI2ZmZiIgc3Ryb2tlPSIjMzEyZTgxIi8+PHJlY3QgeD0iMjk3LjUiIHk9Ijg1IiB3aWR0aD0iMzIuNSIgaGVpZ2h0PSI1MCIgZmlsbD0iI2ZmZiIgc3Ryb2tlPSIjMzEyZTgxIi8+PC9zdmc+","alt":"Given values: 1/4, 2/4. Read the question to see how these values are used."}}],timerLimit:30,score:2,difficulty:'easy',coinsEarned:4,currentHintLevel:0};function closeGameInterface(){}function checkAnswer(){}function readAloud(){}function showHint(){}    async function renderGameScreen(container, topic) {
+      if (currentGame.currentQuestion >= currentGame.questions.length) {
+        // Game completed - auto save and show results
+        // Wait for save to complete so nextTopic is set
+        await saveGameProgressAuto(topic);
+        showGameResults(container, topic);
+        return;
+      }
+
+      const question = currentGame.questions[currentGame.currentQuestion];
+      const progress = Math.round((currentGame.currentQuestion / currentGame.totalQuestions) * 100);
+      currentGame.questionStartTime = Date.now();
+      currentGame.currentHintLevel = 0;
+
+      // Add CSS variables to game container if not already present
+      const gameContainer = document.getElementById('gameContainer');
+      if (gameContainer && !gameContainer.dataset.styled) {
+        const style = document.createElement('style');
+        style.textContent = `
+          #gameContainer {
+            --primary: #6366f1;
+            --secondary: #8b5cf6;
+            --bg-dark: var(--bg);
+            --bg-light: var(--surface);
+            --bg-card: rgba(255, 255, 255, 0.9);
+            --border-color: var(--border);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.2);
+          }
+        `;
+        document.head.appendChild(style);
+        gameContainer.dataset.styled = 'true';
+      }
+
+      container.innerHTML = `
+        <div style="
+          min-height: 100vh;
+          display: flex;
+          flex-direction: column;
+          background: var(--bg);
+          animation: fadeIn 0.4s ease-out;
+          font-family: 'Inter', sans-serif;
+        ">
+          <!-- Top Navigation Bar -->
+          <div class="game-toolbar" style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px 30px;
+            background: #ffffff;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+          ">
+            <button aria-label="Exit quiz" onclick="closeGameInterface()" style="
+              background: transparent;
+              border: none;
+              color: var(--text-secondary);
+              font-size: 28px;
+              cursor: pointer;
+              transition: color 0.2s;
+              padding: 5px;
+              line-height: 1;
+            " onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='var(--text-secondary)'">✕</button>
+            
+            <div style="
+              flex: 1;
+              max-width: 600px;
+              margin: 0 30px;
+              display: flex;
+              align-items: center;
+              gap: 15px;
+            ">
+              <div style="
+                flex: 1;
+                background: var(--border);
+                height: 16px;
+                border-radius: 8px;
+                overflow: hidden;
+              ">
+                <div style="
+                  background: var(--success);
+                  height: 100%;
+                  width: ${progress}%;
+                  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+                  position: relative;
+                ">
+                  <div style="
+                    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+                    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+                    animation: shimmer 2s infinite;
+                  "></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="game-stats" style="display: flex; gap: 15px; align-items: center; font-weight: 700; font-size: 16px;">
+              <div id="gameTimer" style="
+                background: var(--surface-alt);
+                border: 2px solid var(--border);
+                border-radius: 12px;
+                padding: 6px 14px;
+                color: var(--text-primary);
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-family: 'Space Grotesk', sans-serif;
+                font-size: 18px;
+                font-weight: 800;
+                min-width: 70px;
+                justify-content: center;
+              ">⏱ <span id="timerDisplay">${currentGame.timerLimit}</span>s</div>
+              <div style="
+                background: ${currentGame.difficulty === 'hard' ? 'rgba(239,68,68,0.15)' : currentGame.difficulty === 'easy' ? 'rgba(16,185,129,0.15)' : 'rgba(99,102,241,0.15)'};
+                color: ${currentGame.difficulty === 'hard' ? '#ef4444' : currentGame.difficulty === 'easy' ? '#10b981' : '#6366f1'};
+                border-radius: 10px;
+                padding: 6px 12px;
+                font-size: 13px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+              ">${currentGame.difficulty === 'hard' ? '🔥 Hard' : currentGame.difficulty === 'easy' ? '🌱 Easy' : '⚡ Medium'}</div>
+              <div style="color: var(--warning); display: flex; align-items: center; gap: 5px;">
+                <span>⭐</span> ${currentGame.score}
+              </div>
+              <div style="color: #f59e0b; display: flex; align-items: center; gap: 5px; font-size: 15px;">
+                <span>🪙</span> <span id="coinsDisplay">${currentGame.coinsEarned}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Main Scrollable Content -->
+          <div class="game-main" style="
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            overflow-y: auto;
+          ">
+            <div class="game-content" style="width: 100%; max-width: 800px;">
+              
+              <!-- Topic Info Context -->
+              <div class="game-topic" style="text-align: center; margin-bottom: 30px;">
+                <p class="game-question-count">Question ${currentGame.currentQuestion + 1} of ${currentGame.totalQuestions}</p>
+                <h2 style="color: var(--text-primary); margin-bottom: 8px; font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 700;">
+                  ${topic.topic_title}
+                </h2>
+                ${question.skill ? `<span style="background: rgba(99, 102, 241, 0.1); color: var(--primary); padding: 4px 12px; border-radius: 8px; font-size: 14px; font-weight: 600;">Target: ${question.skill}</span>` : ''}
+              </div>
+
+              <!-- Question Container -->
+              <div class="game-question" style="text-align: center; margin-bottom: 40px; position: relative; max-width: 600px; margin-left: auto; margin-right: auto;">
+                <h3 style="
+                  color: var(--text-primary);
+                  font-size: 36px;
+                  font-family: 'Space Grotesk', sans-serif;
+                  font-weight: 700;
+                  line-height: 1.4;
+                  display: inline-block;
+                  position: relative;
+                  padding-right: 60px;
+                ">
+                  ${question.question}
+                  <button aria-label="Read question aloud" onclick="readAloud('${question.question.replace(/'/g, "\\'")}')" style="
+                    position: absolute;
+                    right: 0;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    background: var(--surface-alt);
+                    border: 2px solid var(--border);
+                    color: var(--primary);
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+                  " onmouseover="this.style.background='var(--primary)'; this.style.color='white'; this.style.transform='translateY(-50%) scale(1.1)';"
+                  onmouseout="this.style.background='var(--surface-alt)'; this.style.color='var(--primary)'; this.style.transform='translateY(-50%) scale(1)';">
+                    <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M11 5L6 9H2v6h4l5 4V5z"></path></svg>
+                  </button>
+                </h3>
+              </div>
+
+              ${question.diagram ? `<figure style="max-width: 720px; width: 100%; margin: 0 auto 28px;">
+                <img src="${question.diagram.src}" alt="${question.diagram.alt.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}" style="display: block; width: 100%; max-height: 380px; object-fit: contain; border-radius: 20px; background: #fafbff;" />
+              </figure>` : ''}
+
+              <!-- Answer Area -->
+              <div id="gameAnswerArea" style="margin-bottom: 30px;">
+                ${renderAnswerInput(question)}
+              </div>
+              
+              <!-- Hint Area -->
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; margin-top: 40px;">
+                <button id="hintButton" onclick="showHint()" style="
+                  background: transparent;
+                  color: var(--warning);
+                  border: 2px solid var(--warning);
+                  padding: 10px 24px;
+                  border-radius: 20px;
+                  font-size: 15px;
+                  font-weight: 600;
+                  cursor: pointer;
+                  transition: all 0.2s;
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 8px;
+                " onmouseover="this.style.background='var(--warning)'; this.style.color='white';"
+                onmouseout="this.style.background='transparent'; this.style.color='var(--warning)';">
+                  <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
+                  Need a hint? ${currentGame.currentHintLevel < 3 ? `(${3 - currentGame.currentHintLevel} left)` : ''}
+                </button>
+                <div id="hintDisplay" style="width: 100%;"></div>
+              </div>
+
+              <div id="gameFeedback" style="margin-top: 20px;"></div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Feature 2: Start countdown timer
+      if (currentGame.timerInterval) clearInterval(currentGame.timerInterval);
+      currentGame.timeLeft = currentGame.timerLimit;
+      const timerEl = document.getElementById('timerDisplay');
+      const timerContainer = document.getElementById('gameTimer');
+      if (timerEl) timerEl.textContent = currentGame.timeLeft;
+      if (question.practiceUntimed) {
+        if (timerEl) timerEl.textContent = 'Practice';
+        if (timerContainer) {
+          timerContainer.textContent = '🌱 Practice';
+          timerContainer.setAttribute('aria-label','Untimed practice');
+        }
+        return;
+      }
+
+      currentGame.timerInterval = setInterval(() => {
+        currentGame.timeLeft--;
+        if (timerEl) timerEl.textContent = currentGame.timeLeft;
+        // Visual urgency
+        if (timerContainer) {
+          if (currentGame.timeLeft <= 5) {
+            timerContainer.style.borderColor = '#ef4444';
+            timerContainer.style.color = '#ef4444';
+            timerContainer.style.animation = 'pulse 0.5s ease-in-out';
+          } else if (currentGame.timeLeft <= 10) {
+            timerContainer.style.borderColor = '#f59e0b';
+            timerContainer.style.color = '#f59e0b';
+          }
+        }
+        // Auto-submit on timeout
+        if (currentGame.timeLeft <= 0) {
+          clearInterval(currentGame.timerInterval);
+          currentGame.timerInterval = null;
+          // Submit wrong answer automatically
+          checkAnswer(-1); // -1 signals timeout
+        }
+      }, 1000);
+    }
+
+    // Render answer input based on question type
+    function renderAnswerInput(question) {
+      if (question.type === 'multiple-choice' || question.type === 'true-false') {
+        const gridStyle = question.type === 'true-false' 
+          ? 'grid-template-columns: 1fr 1fr; gap: 20px;' 
+          : `grid-template-columns: repeat(${question.options.length === 3 ? 3 : 2}, minmax(0, 1fr)); gap: 15px;`;
+          
+        return `
+          <div class="game-answer-grid" style="display: grid; ${gridStyle} max-width: 600px; margin: 0 auto;">
+            ${question.options.map((opt, idx) => `
+              <button onclick="checkAnswer(${idx})" style="
+                background: #ffffff;
+                border: 2px solid var(--border);
+                border-bottom: 6px solid var(--border);
+                padding: 24px 20px;
+                border-radius: 20px;
+                font-size: 20px;
+                font-weight: 700;
+                cursor: pointer;
+                color: var(--text-primary);
+                font-family: 'Inter', sans-serif;
+                transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+                position: relative;
+                min-width: 0;
+                overflow-wrap: anywhere;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+              " onmousedown="this.style.transform='translateY(4px)'; this.style.borderBottomWidth='2px';"
+                onmouseup="this.style.transform='translateY(0)'; this.style.borderBottomWidth='6px';"
+                onmouseleave="this.style.transform='translateY(0)'; this.style.borderBottomWidth='6px';"
+                onmouseover="this.style.background='var(--surface-alt)'; this.style.borderColor='var(--primary)';"
+                onmouseout="this.style.background='#ffffff'; this.style.borderColor='var(--border)';">
+                <span style="position: relative; z-index: 1;">${opt}</span>
+              </button>
+            `).join('')}
+          </div>
+        `;
+      } else {
+        const placeholderText = question.type === 'fill-blank' ? 'Fill in the blank...' : 'Enter your answer...';
+        return `
+          <div style="text-align: center; display: flex; flex-direction: column; align-items: center; gap: 30px;">
+            <input type="number" id="gameAnswerInput" step="any" placeholder="${placeholderText}" style="
+              padding: 20px;
+              font-size: 28px;
+              font-weight: 700;
+              border: 3px solid var(--border);
+              border-radius: 16px;
+              width: 100%;
+              max-width: 400px;
+              text-align: center;
+              background: #ffffff;
+              color: var(--text-primary);
+              font-family: 'Space Grotesk', sans-serif;
+              outline: none;
+              transition: all 0.2s;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            " 
+            onfocus="this.style.borderColor='var(--primary)'; this.style.boxShadow='0 0 0 4px rgba(99, 102, 241, 0.2)';"
+            onblur="this.style.borderColor='var(--border)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.05)';"
+            onkeydown="if (event.key === 'Enter') { event.preventDefault(); checkAnswer(); }"
+            />
+            <button onclick="checkAnswer()" style="
+              background: var(--success);
+              color: white;
+              border: none;
+              border-bottom: 6px solid #059669;
+              padding: 18px 50px;
+              border-radius: 20px;
+              font-size: 20px;
+              font-weight: 700;
+              cursor: pointer;
+              font-family: 'Inter', sans-serif;
+              transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+              width: 100%;
+              max-width: 400px;
+              text-transform: uppercase;
+              letter-spacing: 1px;
+            " onmousedown="this.style.transform='translateY(4px)'; this.style.borderBottomWidth='2px';"
+              onmouseup="this.style.transform='translateY(0)'; this.style.borderBottomWidth='6px';">
+              Check Answer
+            </button>
+          </div>
+        `;
+      }
+    }
+
+
+
+renderGameScreen(document.getElementById('gameContainer'),{topic_title:'Grade 2 · Compare Fractions'});</script></html>

@@ -9,6 +9,8 @@
  * pair can appear in more than one topic quiz during the same session.
  */
 
+const { makeGrade1Question } = require('./grade1-lessons');
+const { lessonSkillQuestion } = require('./lesson-skills');
 class CurriculumQuestionGenerator {
   constructor() {
     this.questionTemplates = this.initializeTemplates();
@@ -89,6 +91,10 @@ class CurriculumQuestionGenerator {
    * @returns {Array} Array of unique question objects
    */
   generateQuestionsForTopic(topic, count = 10, index = 0, difficulty = 'medium') {
+    if (!topic || !Number.isInteger(Number(topic.grade)) || Number(topic.grade) < 1 || Number(topic.grade) > 6) throw new Error('Choose a grade from 1 to 6.');
+    if (!['easy', 'medium', 'hard'].includes(difficulty)) difficulty = 'easy';
+    if (Number(topic.grade) === 2 && difficulty === 'hard') difficulty = 'medium';
+    if (Number(topic.grade) === 1) difficulty = 'easy';
     const questions = [];
     // Session-level dedup (within this quiz)
     const usedSignatures = new Set();
@@ -121,21 +127,23 @@ class CurriculumQuestionGenerator {
         // Vary seed with attempts so retries produce genuinely new questions
         const currentIndex = index + randomOffset + i + (attempts * 137);
 
-        question = this.generateQuestionFromLearningOutcome(
+        question = (grade === 1 ? makeGrade1Question(topic,currentIndex,i) : null) || this.generateQuestionFromLearningOutcome(
           learningOutcome, category, grade, topicCode, currentIndex, i, difficulty
         );
 
         if (question) {
-          const signature = `${question.question}|||${question.correctAnswer}`;
+          const answer = question.options ? question.options[question.correctAnswer] : question.correctAnswer;
+          const signature = `${question.question}|||${answer}|||${question.illustration ? JSON.stringify(question.illustration) : ''}`;
+          question.signature = signature;
 
           // Reject if used in this quiz session
           if (usedSignatures.has(signature)) { question = null; continue; }
           // Reject if used in ANY other topic in the same quarter this session
-          if (CurriculumQuestionGenerator.isUsedInQuarter(quarterKey, signature)) { question = null; continue; }
+          if (!question.reviewedSkill && CurriculumQuestionGenerator.isUsedInQuarter(quarterKey, signature)) { question = null; continue; }
 
           // Accept — register in both sets
           usedSignatures.add(signature);
-          CurriculumQuestionGenerator.registerInQuarter(quarterKey, signature);
+          if (!question.reviewedSkill) CurriculumQuestionGenerator.registerInQuarter(quarterKey, signature);
 
           // Attach metadata
           question.difficulty = difficulty;
@@ -217,9 +225,9 @@ class CurriculumQuestionGenerator {
 
   /** Get difficulty multiplier for number ranges */
   getDifficultyRange(grade, difficulty) {
-    const base = { 1: 20, 2: 1000, 3: 10000, 4: 100000, 5: 1000000, 6: 1000000 };
-    const mult = { easy: 0.5, medium: 1, hard: 1.3 };
-    return Math.round((base[grade] || 100) * (mult[difficulty] || 1));
+    const cap = this.getGradeNumberRange(grade, null);
+    const easy = { 1: 20, 2: 100, 3: 1000, 4: 10000, 5: 100000, 6: 100000 };
+    return difficulty === 'easy' ? Math.min(cap, easy[grade]) : cap;
   }
 
   /**
@@ -228,22 +236,25 @@ class CurriculumQuestionGenerator {
    *  Grade 1 Q1: up to 20  | Q2-Q4: up to 100
    *  Grade 2:    up to 1,000
    *  Grade 3:    up to 10,000
-   *  Grade 4:    up to 100,000
+   *  Grade 4:    up to 1,000,000 (stored curriculum ceiling)
    *  Grade 5-6:  up to 1,000,000
    */
   getGradeNumberRange(grade, quarter, outcome = '') {
+    const gradeCap = { 1: 100, 2: 1000, 3: 10000, 4: 1000000, 5: 1000000, 6: 1000000 }[grade] || 100;
+    const explicit = [...outcome.matchAll(/(?:up to|within|less than|sums? (?:of|to)|numbers? (?:to|below))\s*[₱]?\s*(\d[\d,]*)/gi)].map(match => Number(match[1].replace(/,/g,''))).filter(n => n > 0);
+    if (explicit.length) return Math.min(gradeCap, Math.min(...explicit));
     // Honour explicit range mentioned in the learning outcome first
-    if (outcome.includes('1,000,000') || outcome.includes('1000000')) return 1000000;
-    if (outcome.includes('100,000') || outcome.includes('100000'))   return 100000;
-    if (outcome.includes('10,000')  || outcome.includes('10000'))    return 10000;
-    if (outcome.includes('1,000')   || outcome.includes('1000'))     return 1000;
+    if (outcome.includes('1,000,000') || outcome.includes('1000000')) return Math.min(gradeCap, 1000000);
+    if (outcome.includes('100,000') || outcome.includes('100000'))   return Math.min(gradeCap, 100000);
+    if (outcome.includes('10,000')  || outcome.includes('10000'))    return Math.min(gradeCap, 10000);
+    if (outcome.includes('1,000')   || outcome.includes('1000'))     return Math.min(gradeCap, 1000);
     if (outcome.includes(' 100') || outcome.match(/up to 100/))      return 100;
     if (outcome.match(/up to 20/))                                   return 20;
     // Default by grade
     if (grade === 1) return (quarter && quarter >= 2) ? 100 : 20;
     if (grade === 2) return 1000;
     if (grade === 3) return 10000;
-    if (grade === 4) return 100000;
+    if (grade === 4) return 1000000;
     return 1000000; // Grade 5-6
   }
 
@@ -257,6 +268,26 @@ class CurriculumQuestionGenerator {
    */
   generateQuestionFromLearningOutcome(learningOutcome, category, grade, topicCode, index, questionNum, difficulty = 'medium') {
     const outcome = learningOutcome.toLowerCase();
+    if (grade >= 2) {
+      const aligned = lessonSkillQuestion(this, outcome, grade, index, difficulty);
+      if (aligned) return aligned;
+    }
+    // Specific skills must win over generic words such as "represent" or
+    // "number"; otherwise decimal/fraction lessons become whole-number quizzes.
+    if (category === 'Number Sense') {
+      if (/ratio|proportion|percent/.test(outcome)) return this.generateRatioProportionQuestion(grade,index,outcome);
+      if (/factor|multiple|divisib|prime|composite|gcf|lcm/.test(outcome)) return this.generateFactorsMultiplesQuestion(grade,index,outcome);
+      if (/decimal/.test(outcome)) return this.generateDecimalQuestion(grade,index,outcome);
+      if (/fraction|½|¼/.test(outcome)) return grade >= 3 && /add|subtract|multipli|divi|operations/.test(outcome) ? this.generateFractionOperationQuestion(grade,index,outcome) : this.generateFractionQuestion(grade,index,outcome);
+      if (/ordinal/.test(outcome) && !/whole numbers/.test(outcome)) return this.generateOrdinalQuestion(grade,index,outcome);
+    }
+    if (category === 'Operations') {
+      if (/gemdas|order of operations|exponent/.test(outcome)) return this.generateGEMDASQuestion(grade,index,outcome,difficulty);
+      if (/fraction|mixed numbers/.test(outcome) && grade >= 3) return this.generateFractionOperationQuestion(grade,index,outcome);
+      if (/decimal/.test(outcome) && !/fraction/.test(outcome)) return this.generateDecimalQuestion(grade,index,outcome);
+      if (/addition|\badd\b/.test(outcome) && /subtraction|\bsubtract\b/.test(outcome)) return questionNum % 2 ? this.generateSubtractionQuestion(grade,index,outcome,difficulty) : this.generateAdditionQuestion(grade,index,outcome,difficulty);
+      if (/multiplication|multiply/.test(outcome) && /division|divide/.test(outcome)) return questionNum % 2 ? this.generateDivisionQuestion(grade,index,outcome,difficulty) : this.generateMultiplicationQuestion(grade,index,outcome,difficulty);
+    }
 
     // ~20% True/False variant, ~15% fill-blank variant
     const variantRoll = (index * 7 + questionNum * 13) % 100;
@@ -366,14 +397,7 @@ class CurriculumQuestionGenerator {
 
   generateNumberRecognitionQuestion(grade, index, outcome) {
     // Extract number range from outcome (e.g., "up to 100", "up to 1,000")
-    let maxNum = 100;
-    if (outcome.includes('1,000') || outcome.includes('1000')) maxNum = 1000;
-    else if (outcome.includes('10,000') || outcome.includes('10000')) maxNum = 10000;
-    else if (outcome.includes('1,000,000') || outcome.includes('1000000') || outcome.includes('1m')) maxNum = 1000000;
-    else if (grade === 1) maxNum = 100;
-    else if (grade === 2) maxNum = 1000;
-    else if (grade === 3) maxNum = 10000;
-    else if (grade >= 4) maxNum = 1000000;
+    let maxNum = this.getGradeNumberRange(grade, null, outcome);
 
     const seed = (Math.floor(Math.random() * 1000000)) + (index * 137);
     const num = Math.floor((seed * 7919) % maxNum) + 1;
@@ -484,11 +508,13 @@ class CurriculumQuestionGenerator {
           icon: '🍰'
         };
       } else {
+        const options = this.generateFractionOptions(num, den);
+        const simplified = this.simplifyFraction(num, den);
         return {
           question: `What is ${num}/${den} in simplest form?`,
           type: 'multiple-choice',
-          options: this.generateFractionOptions(num, den),
-          correctAnswer: 0,
+          options,
+          correctAnswer: options.indexOf(`${simplified.num}/${simplified.den}`),
           icon: '🍰'
         };
       }
@@ -501,7 +527,7 @@ class CurriculumQuestionGenerator {
     let maxSum = this.getGradeNumberRange(grade, null, outcome);
 
     // Difficulty scaling (keep within grade bounds)
-    if (diff === 'easy')   maxSum = Math.max(grade === 1 ? 10 : 20, Math.round(maxSum * 0.4));
+    if (diff === 'easy')   maxSum = Math.min(maxSum, this.getDifficultyRange(grade, 'easy'));
     else if (diff === 'hard') maxSum = Math.min(maxSum, Math.round(maxSum * 1.2));
 
     const seed = (Math.floor(Math.random() * 1000000)) + (index * 137);
@@ -608,7 +634,7 @@ class CurriculumQuestionGenerator {
     const diff = difficulty || 'medium';
     let maxNum = this.getGradeNumberRange(grade, null, outcome);
 
-    if (diff === 'easy')   maxNum = Math.max(grade === 1 ? 10 : 20, Math.round(maxNum * 0.4));
+    if (diff === 'easy')   maxNum = Math.min(maxNum, this.getDifficultyRange(grade, 'easy'));
     else if (diff === 'hard') maxNum = Math.min(maxNum, Math.round(maxNum * 1.2));
 
     const seed = (Math.floor(Math.random() * 1000000)) + (index * 137);
@@ -828,6 +854,7 @@ class CurriculumQuestionGenerator {
   }
 
   generateGEMDASQuestion(grade, index, outcome, difficulty) {
+    if (grade === 1) return this.generateAdditionQuestion(grade, index, outcome, 'easy');
     // GEMDAS / Order of Operations: Grade 5 and 6 only
     if (grade < 5) {
       // Lower grades see a simpler multi-step problem instead
@@ -971,15 +998,14 @@ class CurriculumQuestionGenerator {
         const targetSides = shape.sides;
         const options = [shape.name];
         for (const s of usableShapes) {
-          if (s.name !== shape.name && !options.includes(s.name)) options.push(s.name);
+          // Distractors must have a different side count. Squares and
+          // rectangles are both correct for four sides.
+          if (s.sides !== targetSides && !options.includes(s.name)) options.push(s.name);
           if (options.length >= 4) break;
         }
         
-        const fallbacks = ['Oval', 'Star', 'Diamond', 'Heart'];
-        for (const fb of fallbacks) {
-          if (options.length >= 4) break;
-          if (!options.includes(fb)) options.push(fb);
-        }
+        // Three unambiguous choices are better than padding with an ambiguous
+        // shape (for example, a diamond also has four sides).
         
         options.sort(() => Math.random() - 0.5);
         return {
@@ -1133,7 +1159,7 @@ class CurriculumQuestionGenerator {
     if (grade === 1) max = Math.min(max, 100); // never exceed ₱100 for Grade 1
 
     if (diff === 'easy')   max = Math.max(grade === 1 ? 10 : 50, Math.round(max * 0.4));
-    else if (diff === 'hard') max = Math.round(max * 1.2);
+    else if (diff === 'hard') max = Math.min(max, this.getGradeNumberRange(grade, null, outcome));
 
     const seed = (Math.floor(Math.random() * 1000000)) + (index * 97);
     let amount1, amount2;
@@ -1264,7 +1290,7 @@ class CurriculumQuestionGenerator {
           return options.slice(0, 4);
         }},
         { type: 'quarter-hour', question: (hour) => `The clock shows quarter past ${hour}. What time is it?`, options: (hour) => [
-          `quarter past ${hour}`, `${hour}:15`, `${hour} o'clock`, `half past ${hour}`
+          `quarter past ${hour}`, `quarter to ${hour}`, `${hour} o'clock`, `half past ${hour}`
         ]},
         { type: 'days', question: (num) => `How many days are in ${num} week${num > 1 ? 's' : ''}?`, options: (num) => {
           const correct = num * 7;
@@ -1525,7 +1551,7 @@ class CurriculumQuestionGenerator {
       };
     } else if (qType === 3) {
       return {
-        question: `A pictograph uses a scale of ${scale}. ${subj1} has ${a} symbols and ${subj2} has ${b} symbols. Which has more items and by how much?`,
+        question: `Each pictograph symbol represents ${scale} items. ${subj1} has ${a} symbols and ${subj2} has ${b} symbols. What is the difference in their numbers of items?`,
         type: 'number',
         correctAnswer: Math.abs(realA - realB),
         icon: '📊'
@@ -1540,7 +1566,7 @@ class CurriculumQuestionGenerator {
       };
     } else {
       return {
-        question: `In a bar graph (scale = ${scale}), ${subj1} has ${a} bars. How many items does ${subj1} represent?`,
+        question: `In a bar graph, each grid unit represents ${scale} items. The bar for ${subj1} is ${a} grid units high. How many items does it represent?`,
         type: 'number',
         correctAnswer: realA,
         icon: '📊'
@@ -1552,12 +1578,14 @@ class CurriculumQuestionGenerator {
     const seed = (Math.floor(Math.random() * 1000000)) + (index * 97);
     const total = (Math.floor(seed * 7919) % 10) + 5;
     const favorable = (Math.floor(seed * 9973) % total) + 1;
+    const options = this.generateFractionOptions(favorable,total);
+    const reduced = this.simplifyFraction(favorable,total);
     
     return {
       question: `In a bag with ${total} marbles, ${favorable} are red. What is the probability of drawing a red marble? (Express as a fraction)`,
       type: 'multiple-choice',
-      options: [`${favorable}/${total}`, `${total}/${favorable}`, `${favorable}/${total - favorable}`, '1/2'],
-      correctAnswer: 0,
+      options,
+      correctAnswer: options.indexOf(`${reduced.num}/${reduced.den}`),
       icon: '🎲'
     };
   }
@@ -1819,6 +1847,101 @@ class CurriculumQuestionGenerator {
   }
 
   // Helper methods
+  choiceQuestion(question, answer, distractors, skill) {
+    const correct = String(answer);
+    const options = [...new Set([correct,...distractors.map(String)])].slice(0,4);
+    options.sort(() => Math.random() - 0.5);
+    return {question,type:'multiple-choice',options,correctAnswer:options.indexOf(correct),skill};
+  }
+
+  generateOddEvenQuestion(grade,index) {
+    const value = 1 + ((Math.floor(Math.random()*1000)+index) % (grade === 2 ? 100 : 1000));
+    return this.choiceQuestion(`Is ${value} odd or even?`,value % 2 ? 'Odd':'Even',['Odd','Even'],'Odd and Even');
+  }
+
+  generateFractionOperationQuestion(grade,index,outcome) {
+    const d=2+Math.floor(Math.random()*7), e=grade===3 || (/similar/.test(outcome) && !/dissimilar/.test(outcome)) ? d : 2+Math.floor(Math.random()*7);
+    let a=1+Math.floor(Math.random()*(d-1)), b=1+Math.floor(Math.random()*(e-1));
+    let op = /multipli|multiply/.test(outcome) ? '×' : /divi|divide/.test(outcome) ? '÷' : /subtract/.test(outcome) && (!/add/.test(outcome) || index%2) ? '-' : '+';
+    if (/multipli/.test(outcome) && /divi/.test(outcome)) op=index%2?'÷':'×';
+    if (op==='-') {
+      // Preserve each original denominator and compare by cross multiplication.
+      const high = Math.max(a*e,b*d), low = Math.min(a*e,b*d);
+      const reduced=this.simplifyFraction(high-low,d*e);
+      const left = a*e >= b*d ? `${a}/${d}` : `${b}/${e}`;
+      const right = a*e >= b*d ? `${b}/${e}` : `${a}/${d}`;
+      return this.choiceQuestion(`What is ${left} - ${right}?`,`${reduced.num}/${reduced.den}`,this.generateFractionOptions(high-low,d*e),'Fraction Subtraction');
+    }
+    const numerator=op==='×'?a*b:op==='÷'?a*e:a*e+b*d;
+    const denominator=op==='×'?d*e:op==='÷'?d*b:d*e;
+    const reduced=this.simplifyFraction(numerator,denominator);
+    return this.choiceQuestion(`What is ${a}/${d} ${op} ${b}/${e}?`,`${reduced.num}/${reduced.den}`,this.generateFractionOptions(numerator,denominator),'Fraction Operations');
+  }
+
+  generateDecimalQuestion(grade,index,outcome) {
+    const places = /ten.thousandth|4 decimal|four decimal/.test(outcome) ? 4 : /thousandth/.test(outcome) || grade >= 5 ? 3 : 2;
+    const scale = 10 ** places;
+    const a = (Math.floor(Math.random()*scale*9)+index) % (scale*9) + 1;
+    const b = (index % 8) + 1;
+    const value = (a/scale).toFixed(places);
+    if (/convert|relationship|represent.*fraction/.test(outcome)) {
+      const reduced = this.simplifyFraction(a, scale);
+      const answer = `${reduced.num}/${reduced.den}`;
+      return { ...this.choiceQuestion(`Write ${value} as a fraction in simplest form.`, answer, this.generateFractionOptions(a,scale), 'Decimals and Fractions'), explanation: `${value} = ${a}/${scale}. Divide the numerator and denominator by ${this.gcd(a,scale)} to simplify.` };
+    }
+    if (/compare|order/.test(outcome)) {
+      const other = ((a+b)/scale).toFixed(places);
+      return this.choiceQuestion(`Which decimal is greater: ${value} or ${other}?`,other,[value],'Comparing Decimals');
+    }
+    if (/round/.test(outcome)) {
+      const targetPlaces = /nearest thousandth/.test(outcome) ? 3 : /nearest hundredth/.test(outcome) ? 2 : /nearest tenth/.test(outcome) ? 1 : places-1;
+      const input = targetPlaces >= places ? (a/(scale*10)).toFixed(places+1) : value;
+      const answer = Number(Number(input).toFixed(targetPlaces));
+      return {question:`Round ${input} to ${targetPlaces} decimal places.`,type:'number',correctAnswer:answer,skill:'Rounding Decimals',explanation:`Look at the digit immediately after decimal place ${targetPlaces}. If it is 5 or more, round up; otherwise keep the last retained digit.`};
+    }
+    if (/add|subtract|multipli|divi|operations/.test(outcome)) {
+      if (/multipli|multiply/.test(outcome) && (!/divi|divide/.test(outcome) || index%2===0)) return {question:`What is ${value} × ${b}?`,type:'number',correctAnswer:Number((a*b/scale).toFixed(places)),skill:'Decimal Multiplication',explanation:`Multiply ${a} by ${b}, then divide by ${scale} to restore the decimal places.`};
+      if (/divi|divide/.test(outcome)) return {question:`What is ${(a*b/scale).toFixed(places)} ÷ ${b}?`,type:'number',correctAnswer:a/scale,skill:'Decimal Division',explanation:`${a*b}/${scale} divided by ${b} = ${a}/${scale} = ${value}.`};
+      const subtract = /subtract/.test(outcome) && (!/add/.test(outcome) || index%2);
+      const x = subtract ? Math.max(a,b) : a, y = subtract ? Math.min(a,b) : b;
+      return {question:`What is ${(x/scale).toFixed(places)} ${subtract?'-':'+'} ${(y/scale).toFixed(places)}?`,type:'number',correctAnswer:Number(((x+(subtract?-y:y))/scale).toFixed(places)),skill:'Decimal Operations',explanation:`Align the decimal points, ${subtract?'subtract':'add'} the digits, and keep ${places} decimal places.`};
+    }
+    const unit = places===2?'hundredths':places===3?'thousandths':'ten thousandths';
+    return {question:`How many ${unit} are in ${value}?`,type:'number',correctAnswer:a,skill:'Decimal Place Value'};
+  }
+
+  generateFactorsMultiplesQuestion(grade,index,outcome) {
+    const a = 2 + ((Math.floor(Math.random()*100)+index)%11);
+    const b = 2 + ((index*7+Math.floor(Math.random()*100))%10);
+    if (/gcf|greatest common factor/.test(outcome)) return {question:`What is the greatest common factor of ${a*2} and ${b*2}?`,type:'number',correctAnswer:this.gcd(a*2,b*2),skill:'GCF'};
+    if (/lcm|least common multiple/.test(outcome)) return {question:`What is the least common multiple of ${a} and ${b}?`,type:'number',correctAnswer:a*b/this.gcd(a,b),skill:'LCM'};
+    if (/prime|composite/.test(outcome)) {
+      const n=a*b+(index%2);
+      const prime=n>=2 && !Array.from({length:Math.max(0,Math.floor(Math.sqrt(n))-1)},(_,i)=>i+2).some(d=>n%d===0);
+      return this.choiceQuestion(`Is ${n} prime or composite?`,prime?'Prime':'Composite',['Prime','Composite'],'Prime and Composite');
+    }
+    if (/divisib/.test(outcome)) {
+      const divisors = /4, 8/.test(outcome)?[4,8,11,12]:/3, 6/.test(outcome)?[3,6,9]:[2,5,10];
+      const d = divisors[index%divisors.length], n=d*b+(index%2);
+      return this.choiceQuestion(`Is ${n} divisible by ${d}?`,n%d===0?'Yes':'No',['Yes','No'],'Divisibility');
+    }
+    const n = Math.min(100,a*b);
+    if (/multiple/.test(outcome) && !/factor/.test(outcome)) return {question:`What is the ${this.getOrdinals(b)[b-1]} multiple of ${a}?`,type:'number',correctAnswer:a*b,skill:'Multiples'};
+    const factor = Array.from({length:n},(_,i)=>i+1).filter(d=>n%d===0);
+    return {question:`How many positive factors does ${n} have?`,type:'number',correctAnswer:factor.length,skill:'Factors'};
+  }
+
+  generateRatioProportionQuestion(grade,index,outcome) {
+    const a=1+Math.floor(Math.random()*9), b=2+(index%8), scale=2+(index%4);
+    if (/percent/.test(outcome)) {
+      const percent=[10,20,25,50,75][index%5], total=20*(1+Math.floor(Math.random()*20));
+      return {question:`What is ${percent}% of ${total}?`,type:'number',correctAnswer:percent*total/100,skill:'Percentages'};
+    }
+    if (/proportion/.test(outcome) && index%2) return {question:`Complete the proportion: ${a}:${b} = ${a*scale}:?`,type:'number',correctAnswer:b*scale,skill:'Proportion'};
+    const g=this.gcd(a,b), answer=`${a/g}:${b/g}`;
+    return this.choiceQuestion(`Simplify the ratio ${a*scale}:${b*scale}.`,answer,[`${a+1}:${b}`,`${a}:${b+1}`,`${a+2}:${b+1}`].filter(r=>{const [x,y]=r.split(':').map(Number);return x*b!==y*a;}),'Ratios');
+  }
+
   getOrdinals(max) {
     const ordinals = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th'];
     if (max > 10) {
@@ -1881,8 +2004,11 @@ class CurriculumQuestionGenerator {
       if (rest === 0) return `${ones[h]} hundred`;
       return `${ones[h]} hundred ${this.numberToWords(rest)}`;
     }
-    // Fallback for larger numbers – use locale string
-    return num.toLocaleString();
+    if (num < 1000000) {
+      const thousands = Math.floor(num / 1000), rest = num % 1000;
+      return `${this.numberToWords(thousands)} thousand${rest ? ' ' + this.numberToWords(rest) : ''}`;
+    }
+    return num === 1000000 ? 'one million' : num.toLocaleString('en-US');
   }
 
   generateFractionOptions(num, den) {
@@ -1890,14 +2016,17 @@ class CurriculumQuestionGenerator {
     const options = [`${simplified.num}/${simplified.den}`];
     
     // Generate wrong options
-    options.push(`${num}/${den}`);
-    options.push(`${num + 1}/${den}`);
-    options.push(`${num}/${den + 1}`);
+    for (const [n,d] of [[num+1,den],[num,den+1],[num+2,den]]) {
+      const reduced = this.simplifyFraction(n,d);
+      options.push(`${reduced.num}/${reduced.den}`);
+    }
     
     // Remove duplicates and ensure 4 options
     const unique = [...new Set(options)];
     while (unique.length < 4) {
-      unique.push(`${Math.floor(Math.random() * 10) + 1}/${Math.floor(Math.random() * 10) + 2}`);
+      const reduced = this.simplifyFraction(Math.floor(Math.random()*10)+1,Math.floor(Math.random()*10)+2);
+      const candidate = `${reduced.num}/${reduced.den}`;
+      if (!unique.includes(candidate)) unique.push(candidate);
     }
     
     return unique.slice(0, 4).sort(() => Math.random() - 0.5);
@@ -1916,6 +2045,11 @@ class CurriculumQuestionGenerator {
   }
 
   generateProblemSolvingQuestion(grade, index, outcome, difficulty) {
+    if (grade === 1) {
+      return index % 2 === 0
+        ? this.generateAdditionQuestion(grade, index, outcome, 'easy')
+        : this.generateSubtractionQuestion(grade, index, outcome, 'easy');
+    }
     const diff = difficulty || 'medium';
     const seed = (Math.floor(Math.random() * 1000000)) + (index * 137);
     const name1 = this.randomName(seed);
@@ -1923,14 +2057,13 @@ class CurriculumQuestionGenerator {
     const scenario = this.randomScenario(seed);
     const item = this.randomItem(scenario, seed);
 
-    let maxNum = grade <= 2 ? 50 : grade <= 4 ? 500 : 5000;
-    if (diff === 'easy') maxNum = Math.round(maxNum * 0.3);
-    else if (diff === 'hard') maxNum = Math.round(maxNum * 1.5);
+    const wordLimits = {2: [20,50,100],3: [100,500,1000],4: [100,1000,10000],5: [1000,10000,100000],6: [1000,10000,100000]};
+    const maxNum = Math.min(this.getGradeNumberRange(grade,null,outcome), wordLimits[grade][['easy','medium','hard'].indexOf(diff)] || wordLimits[grade][0]);
 
-    const a = (Math.floor(seed * 7919) % maxNum) + 1;
-    const b = (Math.floor(seed * 9973) % Math.min(a, maxNum)) + 1;
+    const a = (Math.floor(seed * 7919) % Math.max(1,Math.floor(maxNum/2))) + 1;
+    const b = (Math.floor(seed * 9973) % Math.min(a, Math.max(1,maxNum-a))) + 1;
     
-    const problemType = index % 3;
+    const problemType = index % (grade === 2 ? 2 : 3);
     if (problemType === 0) {
       const answer = a + b;
       return {
@@ -1952,7 +2085,7 @@ class CurriculumQuestionGenerator {
         explanation: `Step 1: Start with ${a} ${item}.\nStep 2: ${b} were sold.\nStep 3: ${a} - ${b} = ${answer}.\nThe answer is ${answer}.`
       };
     } else {
-      const factor = Math.min(12, (seed % 8) + 2);
+      const factor = Math.min(12, (seed % 8) + 2, Math.max(1,Math.floor(this.getGradeNumberRange(grade,null,outcome)/b)));
       const answer = factor * b;
       return {
         question: `${name1} bought ${factor} packs of ${item} at the ${scenario.place}. Each pack has ${b} pieces. How many pieces of ${item} does ${name1} have?`,
@@ -1966,40 +2099,15 @@ class CurriculumQuestionGenerator {
   }
 
   generateDefaultQuestion(grade, index, category, difficulty) {
-    const diff = difficulty || 'medium';
-    const seed = (Math.floor(Math.random() * 1000000)) + (index * 137);
-    let max = grade <= 2 ? 50 : grade <= 4 ? 500 : 5000;
-    if (diff === 'easy') max = Math.round(max * 0.3);
-    else if (diff === 'hard') max = Math.round(max * 1.5);
-
-    const a = (Math.floor(seed * 7919) % max) + 1;
-    const b = (Math.floor(seed * 9973) % max) + 1;
-
-    if (index % 2 === 0) {
-      const answer = a + b;
-      return {
-        question: `What is ${a} + ${b}?`,
-        type: 'number',
-        correctAnswer: answer,
-        icon: '📝',
-        skill: category || 'Mathematics',
-        explanation: `${a} + ${b} = ${answer}.`
-      };
-    } else {
-      const larger = Math.max(a, b);
-      const smaller = Math.min(a, b);
-      const answer = larger - smaller;
-      return {
-        question: `What is ${larger} - ${smaller}?`,
-        type: 'number',
-        correctAnswer: answer,
-        icon: '📝',
-        skill: category || 'Mathematics',
-        explanation: `${larger} - ${smaller} = ${answer}.`
-      };
+    if (grade === 1) {
+      return index % 2 === 0
+        ? this.generateAdditionQuestion(grade, index, '', 'easy')
+        : this.generateSubtractionQuestion(grade, index, '', 'easy');
     }
+    return index % 2 === 0
+      ? this.generateAdditionQuestion(grade,index,'',difficulty)
+      : this.generateSubtractionQuestion(grade,index,'',difficulty);
   }
-
   initializeTemplates() {
     // Can be extended with more templates
     return {};

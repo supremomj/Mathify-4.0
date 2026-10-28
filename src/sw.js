@@ -1,5 +1,5 @@
 // Mathify Service Worker — Cache-first for static assets, network-first for API
-const CACHE_NAME = 'mathify-v1';
+const CACHE_NAME = 'mathify-v14';
 const STATIC_ASSETS = [
   './',
   './landing.html',
@@ -43,11 +43,21 @@ self.addEventListener('activate', event => {
 // Fetch — skip cross-origin, cache same-origin assets only
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
+  // API responses must never be cached, particularly POST quiz requests.
+  if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
 
   // Skip cross-origin requests entirely (e.g. localhost:3000 API, Google Fonts, CDN)
   // This prevents TypeError when trying to cache responses from other origins
   if (url.origin !== self.location.origin) {
     return; // Let browser handle it natively — no SW involvement
+  }
+  // Keep the UI current during updates, while retaining offline navigation.
+  if (event.request.mode === 'navigate' || /\.(html|css|js)$/.test(url.pathname)) {
+    event.respondWith(fetch(event.request).then(response => {
+      if (response.ok) { const copy=response.clone(); event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy))); }
+      return response;
+    }).catch(()=>caches.match(event.request)));
+    return;
   }
 
   // Static assets: cache-first

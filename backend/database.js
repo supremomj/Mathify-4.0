@@ -1079,14 +1079,16 @@ function updateUserPassword(userId, newPassword) {
 function saveAchievement(userId, achievementData) {
   return new Promise((resolve, reject) => {
     const { achievementType, title, message, topicId, sessionId } = achievementData;
-    const query = `INSERT INTO achievements (user_id, achievement_type, achievement_title, achievement_message, topic_id, session_id) 
-                   VALUES (?, ?, ?, ?, ?, ?)`;
-    db.run(query, [userId, achievementType, title, message || null, topicId || null, sessionId || null], function (err) {
+    const query = `INSERT INTO achievements (user_id, achievement_type, achievement_title, achievement_message, topic_id, session_id)
+                   SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+                     SELECT 1 FROM achievements WHERE user_id = ? AND achievement_type = ?
+                   )`;
+    db.run(query, [userId, achievementType, title, message || null, topicId || null, sessionId || null, userId, achievementType], function (err) {
       if (err) {
         reject(err);
         return;
       }
-      resolve({ success: true, id: this.lastID });
+      resolve({ success: true, awarded: this.changes === 1, id: this.changes === 1 ? this.lastID : null });
     });
   });
 }

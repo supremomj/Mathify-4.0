@@ -1,3 +1,7 @@
+const fs = require('fs');
+const envPath = require('path').join(__dirname, '../.env');
+if (fs.existsSync(envPath) && typeof process.loadEnvFile === 'function') process.loadEnvFile(envPath);
+const { addQuestionDiagrams } = require('./question-diagrams');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -321,7 +325,7 @@ const curriculumGenerator = new CurriculumQuestionGenerator();
 
 app.post('/api/curriculum/generate', async (req, res) => {
   try {
-    const { topic, count = 10, difficulty = 'medium', clearQuarter = false } = req.body;
+    const { topic, count = 10, difficulty = 'easy', clearQuarter = false } = req.body;
 
     // If the caller requests a fresh start for a quarter (new session), clear the registry.
     if (clearQuarter && topic && topic.grade && topic.quarter) {
@@ -329,7 +333,8 @@ app.post('/api/curriculum/generate', async (req, res) => {
     }
 
     const questions = curriculumGenerator.generateQuestionsForTopic(topic, count, 0, difficulty);
-    res.json({ success: true, questions });
+    const illustratedQuestions = await addQuestionDiagrams(questions);
+    res.json({ success: true, questions: illustratedQuestions });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
